@@ -1,0 +1,102 @@
+import { DynamicModule, Module, Global, Provider } from "@nestjs/common";
+import { APP_INTERCEPTOR } from "@nestjs/core";
+import { RequestContextService } from "./request-context.service";
+import { RequestCacheService } from "./request-cache.service";
+import { FieldSelectionInterceptor } from "./field-selection.interceptor";
+import { FieldsInterceptor } from "./fields.interceptor";
+import { ComposeController } from "./compose.controller";
+import { ComposeService } from "./compose.service";
+import { MethodInvokerService } from "./method-invoker.service";
+import { RouteRegistry, RouteEntry } from "./route-registry.service";
+
+export interface OrchestratorModuleConfig {
+  routes: RouteEntry[];
+  maxBatchSize?: number;
+  maxFieldDepth?: number;
+  enableCaching?: boolean;
+  queryTimeout?: number; // Timeout per query in milliseconds
+  totalTimeout?: number; // Total timeout for all queries in milliseconds (deprecated, use maxExecutionTimeMs)
+  maxExecutionTimeMs?: number; // Maximum execution time for entire compose request in milliseconds
+  maxPayloadSize?: number; // Maximum payload size in bytes
+  perRouteCallLimit?: number; // Maximum calls per route within one compose request
+  maxCost?: number; // Maximum cost (total execution time in ms)
+}
+
+const DEFAULT_CONFIG = {
+  maxBatchSize: 50,
+  maxFieldDepth: 10,
+  enableCaching: true,
+  queryTimeout: 30000, // 30 seconds per query
+  totalTimeout: 60000, // 60 seconds total (deprecated)
+  maxExecutionTimeMs: 60000, // 60 seconds total
+  maxPayloadSize: 1048576, // 1 MB
+  perRouteCallLimit: 10, // 10 calls per route
+};
+
+@Global()
+@Module({})
+export class OrchestratorModule {
+  static forRoot(config: OrchestratorModuleConfig): DynamicModule {
+    const mergedConfig = {
+      ...DEFAULT_CONFIG,
+      ...config,
+    };
+
+    const configProvider: Provider = {
+      provide: "ORCHESTRATOR_CONFIG",
+      useValue: {
+        maxBatchSize: mergedConfig.maxBatchSize,
+        maxFieldDepth: mergedConfig.maxFieldDepth,
+        enableCaching: mergedConfig.enableCaching,
+        queryTimeout: mergedConfig.queryTimeout,
+        totalTimeout: mergedConfig.maxExecutionTimeMs || mergedConfig.totalTimeout, // Support both for backward compatibility
+        maxExecutionTimeMs: mergedConfig.maxExecutionTimeMs || mergedConfig.totalTimeout,
+        maxPayloadSize: mergedConfig.maxPayloadSize,
+        perRouteCallLimit: mergedConfig.perRouteCallLimit,
+        maxCost: mergedConfig.maxCost,
+      },
+    };
+
+    // FieldsInterceptor runs first to extract and validate @fields
+    // FieldSelectionInterceptor runs second to apply field selection to responses
+    const fieldsInterceptorProvider: Provider = {
+      provide: APP_INTERCEPTOR,
+      useClass: FieldsInterceptor,
+    };
+
+    const fieldSelectionInterceptorProvider: Provider = {
+      provide: APP_INTERCEPTOR,
+      useClass: FieldSelectionInterceptor,
+    };
+
+    return {
+      module: OrchestratorModule,
+      controllers: [ComposeController],
+      providers: [
+        configProvider,
+        fieldsInterceptorProvider,
+        fieldSelectionInterceptorProvider,
+        RouteRegistry,
+        RequestContextService,
+        RequestCacheService,
+        MethodInvokerService,
+        ComposeService,
+        {
+          provide: "ORCHESTRATOR_INIT",
+          useFactory: (routeRegistry: RouteRegistry) => {
+            // Register routes with validation
+            routeRegistry.register(mergedConfig.routes);
+            return true;
+          },
+          inject: [RouteRegistry],
+        },
+      ],
+      exports: [
+        RouteRegistry,
+        RequestContextService,
+        RequestCacheService,
+        "ORCHESTRATOR_CONFIG",
+      ],
+    };
+  }
+}
