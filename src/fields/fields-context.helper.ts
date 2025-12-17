@@ -1,5 +1,5 @@
-import { RequestContextService } from "./request-context.service";
-import { FieldsContext } from "./fields.interceptor";
+import { RequestContextService } from "../core/context/request-context.service";
+import { FieldsContext } from "./fields.types";
 
 /**
  * Helper functions for accessing fields context from AsyncLocalStorage

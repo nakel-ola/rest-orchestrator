@@ -52,12 +52,6 @@ export interface ComposeModuleOptions {
   maxBatchSize?: number;
 
   /**
-   * Maximum nesting depth for field selection
-   * @default 10
-   */
-  maxFieldDepth?: number;
-
-  /**
    * Enable request-level caching and deduplication
    * @default true
    */

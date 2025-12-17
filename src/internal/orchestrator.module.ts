@@ -1,18 +1,15 @@
-import { DynamicModule, Module, Global, Provider } from "@nestjs/common";
-import { APP_INTERCEPTOR } from "@nestjs/core";
-import { RequestContextService } from "./request-context.service";
+import { Module, Global, Provider } from "@nestjs/common";
+import { ModuleRef } from "@nestjs/core";
+import { ContextModule } from "../core/context/context.module";
 import { RequestCacheService } from "./request-cache.service";
-import { FieldSelectionInterceptor } from "./field-selection.interceptor";
-import { FieldsInterceptor } from "./fields.interceptor";
-import { ComposeController } from "./compose.controller";
-import { ComposeService } from "./compose.service";
+import { ComposeController } from "../compose/compose.controller";
+import { ComposeService } from "../compose/compose.service";
 import { MethodInvokerService } from "./method-invoker.service";
 import { RouteRegistry, RouteEntry } from "./route-registry.service";
 
 export interface OrchestratorModuleConfig {
   routes: RouteEntry[];
   maxBatchSize?: number;
-  maxFieldDepth?: number;
   enableCaching?: boolean;
   queryTimeout?: number; // Timeout per query in milliseconds
   totalTimeout?: number; // Total timeout for all queries in milliseconds (deprecated, use maxExecutionTimeMs)
@@ -24,7 +21,6 @@ export interface OrchestratorModuleConfig {
 
 const DEFAULT_CONFIG = {
   maxBatchSize: 50,
-  maxFieldDepth: 10,
   enableCaching: true,
   queryTimeout: 30000, // 30 seconds per query
   totalTimeout: 60000, // 60 seconds total (deprecated)
@@ -36,7 +32,7 @@ const DEFAULT_CONFIG = {
 @Global()
 @Module({})
 export class OrchestratorModule {
-  static forRoot(config: OrchestratorModuleConfig): DynamicModule {
+  static forRoot(config: OrchestratorModuleConfig) {
     const mergedConfig = {
       ...DEFAULT_CONFIG,
       ...config,
@@ -46,38 +42,25 @@ export class OrchestratorModule {
       provide: "ORCHESTRATOR_CONFIG",
       useValue: {
         maxBatchSize: mergedConfig.maxBatchSize,
-        maxFieldDepth: mergedConfig.maxFieldDepth,
         enableCaching: mergedConfig.enableCaching,
         queryTimeout: mergedConfig.queryTimeout,
-        totalTimeout: mergedConfig.maxExecutionTimeMs || mergedConfig.totalTimeout, // Support both for backward compatibility
-        maxExecutionTimeMs: mergedConfig.maxExecutionTimeMs || mergedConfig.totalTimeout,
+        totalTimeout:
+          mergedConfig.maxExecutionTimeMs || mergedConfig.totalTimeout, // Support both for backward compatibility
+        maxExecutionTimeMs:
+          mergedConfig.maxExecutionTimeMs || mergedConfig.totalTimeout,
         maxPayloadSize: mergedConfig.maxPayloadSize,
         perRouteCallLimit: mergedConfig.perRouteCallLimit,
         maxCost: mergedConfig.maxCost,
       },
     };
 
-    // FieldsInterceptor runs first to extract and validate @fields
-    // FieldSelectionInterceptor runs second to apply field selection to responses
-    const fieldsInterceptorProvider: Provider = {
-      provide: APP_INTERCEPTOR,
-      useClass: FieldsInterceptor,
-    };
-
-    const fieldSelectionInterceptorProvider: Provider = {
-      provide: APP_INTERCEPTOR,
-      useClass: FieldSelectionInterceptor,
-    };
-
     return {
       module: OrchestratorModule,
+      imports: [ContextModule],
       controllers: [ComposeController],
       providers: [
         configProvider,
-        fieldsInterceptorProvider,
-        fieldSelectionInterceptorProvider,
         RouteRegistry,
-        RequestContextService,
         RequestCacheService,
         MethodInvokerService,
         ComposeService,
@@ -93,7 +76,6 @@ export class OrchestratorModule {
       ],
       exports: [
         RouteRegistry,
-        RequestContextService,
         RequestCacheService,
         "ORCHESTRATOR_CONFIG",
       ],

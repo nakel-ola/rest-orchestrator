@@ -1,5 +1,3 @@
-import type { FieldsContext } from "./fields.interceptor";
-
 /**
  * Request-scoped context stored in AsyncLocalStorage
  * 
@@ -19,9 +17,9 @@ export interface RequestContext {
   cache: Map<string, any>;
 
   /**
-   * Selected fields for field selection
+   * Selected fields for field selection (optional, provided by FieldsModule)
    */
-  fields?: FieldsContext;
+  fields?: any; // Will be typed as FieldsContext when FieldsModule is imported
 
   /**
    * Request ID for tracing

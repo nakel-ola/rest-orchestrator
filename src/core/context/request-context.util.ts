@@ -1,6 +1,5 @@
 import { RequestContextService } from "./request-context.service";
 import { RequestContext } from "./request-context.interface";
-import type { FieldsContext } from "./fields.interceptor";
 
 /**
  * Utility functions for type-safe access to request context
@@ -60,9 +59,7 @@ export class RequestContextUtil {
    * @param service RequestContextService instance
    * @returns Fields context or undefined
    */
-  static getFields(
-    service: RequestContextService
-  ): FieldsContext | undefined {
+  static getFields(service: RequestContextService): any {
     return service.getFields();
   }
 
@@ -71,10 +68,7 @@ export class RequestContextUtil {
    * @param service RequestContextService instance
    * @param fields Fields context
    */
-  static setFields(
-    service: RequestContextService,
-    fields: FieldsContext
-  ): void {
+  static setFields(service: RequestContextService, fields: any): void {
     service.setFields(fields);
   }
 

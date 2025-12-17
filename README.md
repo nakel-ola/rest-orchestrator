@@ -13,6 +13,7 @@
 - 🛡️ **Safety Guards**: Configurable limits for queries, execution time, payload size, and per-route calls
 - 📦 **Type-Safe**: Full TypeScript support with comprehensive interfaces
 - 🔌 **Pluggable Cache**: Optional Redis adapter interface for distributed caching
+- 🧩 **Modular Design**: Use field selection, composition, or both independently
 
 ## Installation
 
@@ -22,7 +23,46 @@ npm install rest-orchestrator
 
 ## Quick Start
 
-### 1. Register Routes
+### Usage Pattern 1: FieldsModule Only (Field Selection)
+
+Enable field selection for normal REST endpoints:
+
+```typescript
+import { Module } from "@nestjs/common";
+import { FieldsModule } from "rest-orchestrator";
+
+@Module({
+  imports: [
+    FieldsModule.forRoot({
+      maxFieldDepth: 10, // Optional: default is 10
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+Use `@fields` in request body:
+
+```typescript
+// POST /user/me
+// Body: { "@fields": ["id", "email", "name", "profile.bio"] }
+
+// Response: Only selected fields are returned
+{
+  "id": "user-123",
+  "email": "john@example.com",
+  "name": "John Doe",
+  "profile": {
+    "bio": "Software developer"
+  }
+}
+```
+
+**Note:** `/compose` endpoint is NOT available with FieldsModule only.
+
+### Usage Pattern 2: ComposeModule Only (REST Composition)
+
+Enable REST composition for batching queries:
 
 ```typescript
 import { Module } from "@nestjs/common";
@@ -57,24 +97,7 @@ import { UserService } from "./user.service";
 export class AppModule {}
 ```
 
-### 2. Use Field Selection in Normal Endpoints
-
-```typescript
-// POST /user/me
-// Body: { "@fields": ["id", "email", "name", "profile.bio"] }
-
-// Response: Only selected fields are returned
-{
-  "id": "user-123",
-  "email": "john@example.com",
-  "name": "John Doe",
-  "profile": {
-    "bio": "Software developer"
-  }
-}
-```
-
-### 3. Batch Multiple Queries with `/compose`
+Batch multiple queries:
 
 ```typescript
 // POST /compose
@@ -82,16 +105,10 @@ export class AppModule {}
 {
   "queries": {
     "user": {
-      "path": "/user/me",
-      "body": {
-        "@fields": ["id", "email", "name"]
-      }
+      "path": "/user/me"
     },
     "posts": {
-      "path": "/posts",
-      "body": {
-        "@fields": ["id", "title"]
-      }
+      "path": "/posts"
     }
   }
 }
@@ -110,11 +127,87 @@ export class AppModule {}
 }
 ```
 
+**Note:** `@fields` feature is NOT available with ComposeModule only. If you try to use `@fields` in a compose query, you'll get a clear error message.
+
+### Usage Pattern 3: Both Modules Together (Recommended)
+
+Enable both field selection and REST composition:
+
+```typescript
+import { Module } from "@nestjs/common";
+import { FieldsModule, ComposeModule } from "rest-orchestrator";
+import { UserService } from "./user.service";
+
+@Module({
+  imports: [
+    FieldsModule.forRoot({
+      maxFieldDepth: 10,
+    }),
+    ComposeModule.forRoot({
+      routes: [
+        {
+          path: "/user/me",
+          handler: {
+            handler: UserService,
+            method: "findAuthUser",
+            httpMethod: "GET",
+          },
+        },
+      ],
+    }),
+  ],
+  providers: [UserService],
+})
+export class AppModule {}
+```
+
+Now you can use both features:
+
+```typescript
+// 1. Normal endpoint with @fields
+// POST /user/me
+// Body: { "@fields": ["id", "email", "name"] }
+
+// 2. /compose with @fields
+// POST /compose
+// Body:
+{
+  "queries": {
+    "user": {
+      "path": "/user/me",
+      "body": {
+        "@fields": ["id", "email", "name"]
+      }
+    }
+  }
+}
+```
+
 ## API Reference
+
+### FieldsModule
+
+Optional module for field selection feature.
+
+#### `FieldsModule.forRoot(options?: FieldsModuleOptions)`
+
+**Options:**
+
+```typescript
+interface FieldsModuleOptions {
+  maxFieldDepth?: number; // Max field selection depth (default: 10)
+}
+```
+
+**When to use:**
+
+- You want field selection on normal REST endpoints
+- You want to reduce payload sizes by selecting only needed fields
+- You don't need the `/compose` batching feature
 
 ### ComposeModule
 
-The main module for configuring rest-orchestrator.
+Main module for REST composition and batching.
 
 #### `ComposeModule.forRoot(options: ComposeModuleOptions)`
 
@@ -130,7 +223,6 @@ interface ComposeModuleOptions {
   maxExecutionTimeMs?: number; // Max execution time in ms (default: 60000)
   maxPayloadSize?: number; // Max payload size in bytes (default: 1048576)
   perRouteCallLimit?: number; // Max calls per route (default: 10)
-  maxFieldDepth?: number; // Max field selection depth (default: 10)
   enableCaching?: boolean; // Enable request-level caching (default: true)
 }
 ```
@@ -148,9 +240,15 @@ interface RouteRegistration {
 }
 ```
 
+**When to use:**
+
+- You want to batch multiple API calls into a single request
+- You want request-level caching and deduplication
+- You may or may not need field selection (install FieldsModule separately if needed)
+
 ### Field Selection
 
-Use `@fields` in the request body to select specific fields:
+Use `@fields` in the request body to select specific fields. **Requires FieldsModule to be installed.**
 
 ```typescript
 // Request body
@@ -172,10 +270,11 @@ Use `@fields` in the request body to select specific fields:
 - Supports dot notation for nested fields
 - Automatically removed from body before reaching service/controller
 - Applied to response automatically
+- **Must have FieldsModule installed** - otherwise you'll get `FieldsFeatureNotEnabledError`
 
 ### Compose Endpoint
 
-**Endpoint:** `POST /compose`
+**Endpoint:** `POST /compose` (requires ComposeModule)
 
 **Request Format:**
 
@@ -185,7 +284,7 @@ Use `@fields` in the request body to select specific fields:
     "alias": {
       "path": "/user/me",              // Required: Registered path
       "body": {                         // Optional: Request body
-        "@fields": ["id", "name"]
+        "@fields": ["id", "name"]      // Optional: Requires FieldsModule
       },
       "params": {                       // Optional: Path parameters
         "id": "user-123"
@@ -231,7 +330,7 @@ Identical queries within a single `/compose` request are automatically deduplica
 }
 ```
 
-Cache key format: `path:normalizedBodyHash:fieldHash`
+Cache key format: `path:normalizedBodyHash:fieldHash:paramsHash`
 
 ### Shared AsyncLocalStorage Context
 
@@ -240,7 +339,7 @@ All requests share an AsyncLocalStorage context that includes:
 - Request ID
 - Start time
 - Per-request cache (for automatic deduplication)
-- Selected fields
+- Selected fields (if FieldsModule is installed)
 - Request metadata
 
 The context is automatically managed by rest-orchestrator. The request-level cache is used internally for deduplication of identical queries within a `/compose` request.
@@ -342,6 +441,30 @@ Invalid request format returns `400 Bad Request`:
 }
 ```
 
+### FieldsFeatureNotEnabledError
+
+If you try to use `@fields` without FieldsModule installed:
+
+```json
+{
+  "statusCode": 500,
+  "message": "The \"@fields\" feature is being used but FieldsModule is not installed.\n\nFix:\n  import { FieldsModule } from \"rest-orchestrator\";\n  FieldsModule.forRoot()",
+  "error": "FieldsFeatureNotEnabledError"
+}
+```
+
+**Fix:** Install FieldsModule:
+
+```typescript
+@Module({
+  imports: [
+    FieldsModule.forRoot(),
+    ComposeModule.forRoot({ routes: [...] }),
+  ],
+})
+export class AppModule {}
+```
+
 ### Query Errors
 
 Failed queries are included in the response:
@@ -373,7 +496,13 @@ Query or request timeouts return `408 Request Timeout`:
 
 ## Best Practices
 
-### 1. Register All Routes at Startup
+### 1. Choose the Right Module Combination
+
+- **FieldsModule only**: When you only need field selection on normal endpoints
+- **ComposeModule only**: When you only need batching without field selection
+- **Both modules**: When you need both features (recommended for full functionality)
+
+### 2. Register All Routes at Startup
 
 Register all routes in `ComposeModule.forRoot()` to ensure validation at startup:
 
@@ -385,7 +514,7 @@ ComposeModule.forRoot({
 });
 ```
 
-### 2. Use Field Selection Sparingly
+### 3. Use Field Selection Sparingly
 
 Field selection adds processing overhead. Use it when you need to reduce payload size:
 
@@ -397,7 +526,7 @@ Field selection adds processing overhead. Use it when you need to reduce payload
 { "@fields": ["id", "name", "email", "profile", "posts", ...] }
 ```
 
-### 3. Leverage Request-Level Caching
+### 4. Leverage Request-Level Caching
 
 Identical queries are automatically cached. Structure your queries to take advantage:
 
@@ -411,7 +540,7 @@ Identical queries are automatically cached. Structure your queries to take advan
 }
 ```
 
-### 4. Set Appropriate Safety Guards
+### 5. Set Appropriate Safety Guards
 
 Configure guards based on your application's needs:
 
@@ -425,7 +554,7 @@ ComposeModule.forRoot({
 })
 ```
 
-### 5. Handle Errors Gracefully
+### 6. Handle Errors Gracefully
 
 Always check for errors in `/compose` responses:
 
@@ -443,20 +572,65 @@ if (data.user?.error) {
 }
 ```
 
+## Migration Guide
+
+If you were previously using `ComposeModule` with `maxFieldDepth`:
+
+**OLD:**
+
+```typescript
+ComposeModule.forRoot({
+  routes: [...],
+  maxFieldDepth: 10,  // ❌ This option no longer exists
+})
+```
+
+**NEW:**
+
+```typescript
+FieldsModule.forRoot({
+  maxFieldDepth: 10,  // ✅ Now in FieldsModule
+}),
+ComposeModule.forRoot({
+  routes: [...],
+  // maxFieldDepth removed
+})
+```
+
 ## Examples
 
-See [`examples/basic-usage.example.ts`](./examples/basic-usage.example.ts) for a complete end-to-end example.
+See [`examples/basic-usage.example.ts`](./examples/basic-usage.example.ts) for complete examples of all three usage patterns.
 
 ## Architecture
 
 ### How It Works
 
-1. **Route Registration**: Routes are registered at startup and validated
-2. **Field Interceptor**: Extracts and validates `@fields` from request body
-3. **Field Selection Interceptor**: Applies field selection to responses
-4. **Compose Controller**: Handles `/compose` endpoint, validates requests
-5. **Compose Service**: Executes queries in parallel, applies caching, enforces limits
-6. **Request Context**: Shared AsyncLocalStorage context across all operations
+1. **Route Registration**: Routes are registered at startup and validated (ComposeModule)
+2. **Field Interceptor**: Extracts and validates `@fields` from request body (FieldsModule)
+3. **Field Selection Interceptor**: Applies field selection to responses (FieldsModule)
+4. **Compose Controller**: Handles `/compose` endpoint, validates requests (ComposeModule)
+5. **Compose Service**: Executes queries in parallel, applies caching, enforces limits (ComposeModule)
+6. **Request Context**: Shared AsyncLocalStorage context across all operations (Core)
+
+### Module Dependencies
+
+```
+ContextModule (core)
+  ├── RequestContextService (AsyncLocalStorage)
+  └── RequestContextMiddleware
+
+FieldsModule
+  ├── depends on: ContextModule
+  ├── FieldsInterceptor (APP_INTERCEPTOR)
+  ├── FieldSelectionInterceptor (APP_INTERCEPTOR)
+  └── exports: FieldsContextHelper, FieldSelector
+
+ComposeModule
+  ├── depends on: ContextModule
+  ├── ComposeController
+  ├── ComposeService
+  └── (does NOT depend on FieldsModule)
+```
 
 ### Direct Method Invocation
 
@@ -480,6 +654,7 @@ This ensures:
 - **No HTTP Calls**: All queries must be registered routes (no external APIs)
 - **Synchronous Execution**: Queries execute in parallel but within the same process
 - **Request-Scoped Cache**: Cache is cleared after each request (use adapter for persistence)
+- **Field Selection Requires FieldsModule**: `@fields` feature must be explicitly enabled
 
 ## Contributing
 

@@ -5,18 +5,19 @@ import {
   Inject,
   RequestTimeoutException,
 } from "@nestjs/common";
-import { RouteRegistry } from "./route-registry.service";
-import { RequestCacheService } from "./request-cache.service";
-import { RequestContextService } from "./request-context.service";
-import { RequestContextUtil } from "./request-context.util";
-import { FieldSelector } from "./field-selector.util";
-import { FieldsContextHelper } from "./fields-context.helper";
-import { MethodInvokerService } from "./method-invoker.service";
+import { ModuleRef } from "@nestjs/core";
+import { RouteRegistry } from "../internal/route-registry.service";
+import { RequestCacheService } from "../internal/request-cache.service";
+import { RequestContextService } from "../core/context/request-context.service";
+import { RequestContextUtil } from "../core/context/request-context.util";
+import { FieldSelector } from "../fields/field-selector.util";
+import { FieldsContextHelper } from "../fields/fields-context.helper";
+import { FieldsFeatureNotEnabledError } from "../fields/fields.errors";
+import { MethodInvokerService } from "../internal/method-invoker.service";
 import { ComposeQuery } from "../interfaces/compose-request.interface";
 
 interface OrchestratorConfig {
   maxBatchSize: number;
-  maxFieldDepth: number;
   enableCaching: boolean;
   queryTimeout?: number; // Timeout per query in milliseconds
   totalTimeout?: number; // Total timeout for all queries in milliseconds (deprecated, use maxExecutionTimeMs)
@@ -27,7 +28,7 @@ interface OrchestratorConfig {
 
 /**
  * ComposeService - Core service for executing compose queries
- * 
+ *
  * Responsibilities:
  * 1. Iterate through compose queries
  * 2. Resolve path via RouteRegistry
@@ -36,7 +37,7 @@ interface OrchestratorConfig {
  * 5. Apply request-level caching
  * 6. Collect results by alias
  * 7. Enforce timeout and cost limits
- * 
+ *
  * Constraints:
  * - NO HTTP calls
  * - NO reflection hacks
@@ -47,15 +48,43 @@ interface OrchestratorConfig {
 export class ComposeService {
   private readonly DEFAULT_QUERY_TIMEOUT = 30000; // 30 seconds per query
   private readonly DEFAULT_TOTAL_TIMEOUT = 60000; // 60 seconds total
+  private readonly DEFAULT_MAX_FIELD_DEPTH = 10; // Default max field depth
 
   constructor(
     private readonly routeRegistry: RouteRegistry,
     private readonly requestCache: RequestCacheService,
     private readonly requestContext: RequestContextService,
     private readonly methodInvoker: MethodInvokerService,
+    private readonly moduleRef: ModuleRef,
     @Inject("ORCHESTRATOR_CONFIG")
     private readonly config: OrchestratorConfig
   ) {}
+
+  /**
+   * Check if FieldsModule is enabled
+   */
+  private isFieldsModuleEnabled(): boolean {
+    try {
+      this.moduleRef.get("FIELDS_MODULE_ENABLED", { strict: false });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get max field depth from FieldsModule config if available
+   */
+  private getMaxFieldDepth(): number {
+    try {
+      const fieldsConfig = this.moduleRef.get("FIELDS_CONFIG", {
+        strict: false,
+      });
+      return fieldsConfig?.maxFieldDepth ?? this.DEFAULT_MAX_FIELD_DEPTH;
+    } catch {
+      return this.DEFAULT_MAX_FIELD_DEPTH;
+    }
+  }
 
   /**
    * Execute multiple compose queries in parallel
@@ -66,10 +95,11 @@ export class ComposeService {
     queries: Record<string, ComposeQuery>
   ): Promise<Record<string, any>> {
     const startTime = Date.now();
-    const queryTimeout =
-      this.config.queryTimeout || this.DEFAULT_QUERY_TIMEOUT;
+    const queryTimeout = this.config.queryTimeout || this.DEFAULT_QUERY_TIMEOUT;
     const maxExecutionTime =
-      this.config.maxExecutionTimeMs || this.config.totalTimeout || this.DEFAULT_TOTAL_TIMEOUT;
+      this.config.maxExecutionTimeMs ||
+      this.config.totalTimeout ||
+      this.DEFAULT_TOTAL_TIMEOUT;
 
     // Track per-route call counts for safety guard
     const routeCallCounts = new Map<string, number>();
@@ -173,10 +203,7 @@ export class ComposeService {
   /**
    * Create a timeout promise that rejects after specified time
    */
-  private createTimeoutPromise(
-    timeout: number,
-    alias: string
-  ): Promise<never> {
+  private createTimeoutPromise(timeout: number, alias: string): Promise<never> {
     return new Promise((_, reject) => {
       setTimeout(() => {
         reject(
@@ -232,14 +259,24 @@ export class ComposeService {
       const body = query.body || {};
       const operationFields = body["@fields"];
       const hadFields =
-        operationFields && Array.isArray(operationFields) && operationFields.length > 0;
+        operationFields &&
+        Array.isArray(operationFields) &&
+        operationFields.length > 0;
 
       if (hadFields) {
+        // Check if FieldsModule is enabled
+        if (!this.isFieldsModuleEnabled()) {
+          throw new FieldsFeatureNotEnabledError();
+        }
+
+        // Get max field depth from FieldsModule config
+        const maxFieldDepth = this.getMaxFieldDepth();
+
         // Store in context for FieldSelectionInterceptor to use
         FieldsContextHelper.setFields(
           this.requestContext,
           operationFields,
-          this.config.maxFieldDepth
+          maxFieldDepth
         );
       }
 
@@ -298,10 +335,11 @@ export class ComposeService {
 
       let result = invocation.result;
 
-      // Apply field selection if specified
-      if (hadFields) {
+      // Apply field selection if specified and FieldsModule is enabled
+      if (hadFields && this.isFieldsModuleEnabled()) {
+        const maxFieldDepth = this.getMaxFieldDepth();
         result = FieldSelector.selectFields(result, operationFields, {
-          maxDepth: this.config.maxFieldDepth,
+          maxDepth: maxFieldDepth,
         });
       }
 
@@ -321,7 +359,7 @@ export class ComposeService {
           operationFields, // Fields will be hashed
           Object.keys(allParams).length > 0 ? allParams : undefined
         );
-        
+
         await this.requestCache.set(cacheKey, result);
       }
 
@@ -334,12 +372,14 @@ export class ComposeService {
    * Tries all HTTP methods to find a match
    * @returns Resolved route with HTTP method, or null if not found
    */
-  private resolvePath(
-    path: string
-  ): { route: any; httpMethod: string } | null {
-    const httpMethods: Array<
-      "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
-    > = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  private resolvePath(path: string): { route: any; httpMethod: string } | null {
+    const httpMethods: Array<"GET" | "POST" | "PUT" | "PATCH" | "DELETE"> = [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+    ];
 
     for (const method of httpMethods) {
       const resolved = this.routeRegistry.resolve(path, method);
@@ -390,7 +430,10 @@ export class ComposeService {
   /**
    * Normalize error to consistent format
    */
-  private normalizeError(error: any, alias: string): {
+  private normalizeError(
+    error: any,
+    alias: string
+  ): {
     error: string;
     statusCode: number;
   } {

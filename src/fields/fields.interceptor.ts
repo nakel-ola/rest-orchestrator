@@ -6,25 +6,18 @@ import {
   BadRequestException,
   Inject,
 } from "@nestjs/common";
-import { Observable } from "rxjs";
-import { RequestContextService } from "./request-context.service";
-import { RequestContextUtil } from "./request-context.util";
+import { Observable, from, firstValueFrom } from "rxjs";
+import { RequestContextService } from "../core/context/request-context.service";
+import { RequestContextUtil } from "../core/context/request-context.util";
+import { FieldsContext } from "./fields.types";
 
-interface OrchestratorConfig {
+interface FieldsConfig {
   maxFieldDepth: number;
 }
 
 /**
- * Fields context stored in AsyncLocalStorage
- */
-export interface FieldsContext {
-  fields: string[];
-  maxDepth: number;
-}
-
-/**
  * Global interceptor that extracts, validates, and stores @fields from request body
- * 
+ *
  * Behavior:
  * - Detects "@fields" in request body
  * - Validates it is an array of strings
@@ -36,41 +29,56 @@ export interface FieldsContext {
 @Injectable()
 export class FieldsInterceptor implements NestInterceptor {
   constructor(
-    @Inject("ORCHESTRATOR_CONFIG")
-    private readonly config: OrchestratorConfig,
+    @Inject("FIELDS_CONFIG")
+    private readonly config: FieldsConfig,
     private readonly requestContext: RequestContextService
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const request = context.switchToHttp().getRequest();
-    
+
     // Fast path: no body or no @fields, no processing needed
-    if (!request.body || typeof request.body !== "object" || !("@fields" in request.body)) {
+    if (
+      !request.body ||
+      typeof request.body !== "object" ||
+      !("@fields" in request.body)
+    ) {
       return next.handle();
     }
 
-    // Ensure context exists (should be initialized by middleware)
-    // If not, we can't store fields, so skip processing
-    if (!this.requestContext.hasContext()) {
-      // Context should be initialized by RequestContextMiddleware
-      // If it's not, we'll still process but fields won't be stored in context
-      // This is a fallback for cases where middleware isn't registered
+    // Ensure context exists - initialize if it doesn't exist
+    // This ensures fields can be stored even if middleware isn't registered
+    const needsContextInit = !this.requestContext.hasContext();
+    let contextData: any = null;
+
+    if (needsContextInit) {
+      const httpContext = context.switchToHttp();
+      const req = httpContext.getRequest();
+      contextData = RequestContextUtil.createContext({
+        requestId:
+          (req.headers["x-request-id"] as string) ||
+          `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        method: req.method,
+        path: req.path,
+        metadata: {
+          ip: req.ip,
+          userAgent: req.get("user-agent"),
+        },
+      });
     }
 
     const fields = request.body["@fields"];
 
     // Validate @fields is an array
     if (!Array.isArray(fields)) {
-      throw new BadRequestException(
-        '@fields must be an array of strings'
-      );
+      throw new BadRequestException("@fields must be an array of strings");
     }
 
     // Validate all items are strings and check depth
     const validatedFields: string[] = [];
     for (let i = 0; i < fields.length; i++) {
       const field = fields[i];
-      
+
       if (typeof field !== "string") {
         throw new BadRequestException(
           `@fields[${i}] must be a string, got ${typeof field}`
@@ -102,11 +110,25 @@ export class FieldsInterceptor implements NestInterceptor {
       fields: validatedFields,
       maxDepth: this.config.maxFieldDepth,
     };
-    
+
+    // If context needs initialization, wrap the entire Observable chain
+    if (needsContextInit && contextData) {
+      return from(
+        this.requestContext.runAsync(contextData, async () => {
+          // Set fields in the newly created context
+          this.requestContext.setFields(fieldsContext);
+
+          // Get the Observable and convert to Promise using firstValueFrom
+          const obs = next.handle();
+          return firstValueFrom(obs);
+        })
+      );
+    }
+
+    // Context already exists, just set fields and continue
     this.requestContext.setFields(fieldsContext);
 
     // Continue with the request (fields are now in context, body is cleaned)
     return next.handle();
   }
 }
-

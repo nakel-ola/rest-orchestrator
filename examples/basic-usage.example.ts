@@ -1,23 +1,14 @@
 /**
  * End-to-End Example: rest-orchestrator
  *
- * This example demonstrates:
- * 1. Registering route mappings
- * 2. Normal endpoint using @fields
- * 3. /compose batching multiple endpoints
- * 4. Shared AsyncLocalStorage context
- * 5. Response format
+ * This example demonstrates three usage patterns:
+ * 1. FieldsModule only (field selection for normal endpoints)
+ * 2. ComposeModule only (REST composition without fields)
+ * 3. Both modules together (REST composition with field selection)
  */
 
-import {
-  Module,
-  Controller,
-  Get,
-  Post,
-  Body,
-  Injectable,
-} from "@nestjs/common";
-import { ComposeModule, ComposeModuleOptions } from "../src";
+import { Module, Controller, Get, Injectable } from "@nestjs/common";
+import { ComposeModule, FieldsModule } from "../src";
 
 // ============================================================================
 // 1. Define Services/Controllers
@@ -203,15 +194,154 @@ export class StatsController {
 }
 
 // ============================================================================
-// 2. Register Routes in AppModule
+// 2. Usage Pattern 1: FieldsModule Only
 // ============================================================================
 
+/**
+ * Example: Using only FieldsModule for field selection on normal endpoints
+ *
+ * This enables @fields feature for regular REST endpoints but does NOT
+ * provide the /compose endpoint.
+ */
+@Module({
+  imports: [
+    FieldsModule.forRoot({
+      maxFieldDepth: 10, // Optional: default is 10
+    }),
+  ],
+  providers: [UserService, PostService],
+  controllers: [StatsController],
+})
+export class FieldsOnlyModule {}
+
+/**
+ * Usage with FieldsModule only:
+ *
+ * POST /user/me
+ * Body: { "@fields": ["id", "email", "name", "profile.bio"] }
+ *
+ * Response:
+ * {
+ *   "id": "user-123",
+ *   "email": "john@example.com",
+ *   "name": "John Doe",
+ *   "profile": {
+ *     "bio": "Software developer"
+ *   }
+ * }
+ *
+ * Note: /compose endpoint is NOT available with FieldsModule only
+ */
+
+// ============================================================================
+// 3. Usage Pattern 2: ComposeModule Only
+// ============================================================================
+
+/**
+ * Example: Using only ComposeModule for REST composition
+ *
+ * This provides the /compose endpoint for batching queries but does NOT
+ * enable @fields feature. If you try to use @fields in a compose query,
+ * you'll get a clear error message.
+ */
 @Module({
   imports: [
     ComposeModule.forRoot({
-      // Register route mappings
       routes: [
-        // Service method registration
+        {
+          path: "/user/me",
+          handler: {
+            handler: UserService,
+            method: "findAuthUser",
+            httpMethod: "GET",
+          },
+        },
+        {
+          path: "/users/:id",
+          handler: {
+            handler: UserService,
+            method: "findById",
+            httpMethod: "GET",
+          },
+        },
+        {
+          path: "/posts",
+          handler: {
+            handler: PostService,
+            method: "findAll",
+            httpMethod: "GET",
+          },
+        },
+        {
+          path: "/stats",
+          handler: {
+            handler: StatsController,
+            method: "getStats",
+            httpMethod: "GET",
+          },
+        },
+      ],
+      maxBatchSize: 50,
+      maxExecutionTimeMs: 60000,
+      maxPayloadSize: 1048576,
+      perRouteCallLimit: 10,
+      enableCaching: true,
+    }),
+  ],
+  providers: [UserService, PostService],
+  controllers: [StatsController],
+})
+export class ComposeOnlyModule {}
+
+/**
+ * Usage with ComposeModule only:
+ *
+ * POST /compose
+ * Body: {
+ *   "queries": {
+ *     "user": { "path": "/user/me" },
+ *     "posts": { "path": "/posts" },
+ *     "stats": { "path": "/stats" }
+ *   }
+ * }
+ *
+ * Response:
+ * {
+ *   "user": { "id": "user-123", "email": "john@example.com", ... },
+ *   "posts": [ { "id": "post-1", ... }, ... ],
+ *   "stats": { "totalUsers": 1000, ... }
+ * }
+ *
+ * Note: @fields feature is NOT available. If you try to use it:
+ * POST /compose
+ * Body: {
+ *   "queries": {
+ *     "user": { "path": "/user/me", "body": { "@fields": ["id"] } }
+ *   }
+ * }
+ *
+ * Error: FieldsFeatureNotEnabledError
+ * The "@fields" feature is being used but FieldsModule is not installed.
+ */
+
+// ============================================================================
+// 4. Usage Pattern 3: Both Modules Together
+// ============================================================================
+
+/**
+ * Example: Using both FieldsModule and ComposeModule together
+ *
+ * This provides both:
+ * - @fields feature for normal endpoints
+ * - /compose endpoint with @fields support
+ */
+@Module({
+  imports: [
+    FieldsModule.forRoot({
+      maxFieldDepth: 10,
+    }),
+    ComposeModule.forRoot({
+      routes: [
         {
           path: "/user/me",
           handler: {
@@ -244,7 +374,6 @@ export class StatsController {
             httpMethod: "GET",
           },
         },
-        // Controller method registration
         {
           path: "/stats",
           handler: {
@@ -254,33 +383,24 @@ export class StatsController {
           },
         },
       ],
-
-      // Optional: Configure safety guards
-      maxBatchSize: 50, // Max queries per /compose request
-      maxExecutionTimeMs: 60000, // Max execution time (60s)
-      maxPayloadSize: 1048576, // Max payload size (1 MB)
-      perRouteCallLimit: 10, // Max calls per route
-      maxFieldDepth: 10, // Max field selection depth
-      enableCaching: true, // Enable request-level caching
-    } as ComposeModuleOptions),
+      maxBatchSize: 50,
+      maxExecutionTimeMs: 60000,
+      maxPayloadSize: 1048576,
+      perRouteCallLimit: 10,
+      enableCaching: true,
+    }),
   ],
   providers: [UserService, PostService],
   controllers: [StatsController],
 })
 export class AppModule {}
 
-// ============================================================================
-// 3. Example Usage: Normal Endpoint with @fields
-// ============================================================================
-
 /**
- * Example: GET /user/me with field selection
+ * Usage with both modules:
  *
- * Request:
+ * 1. Normal endpoint with @fields:
  * POST /user/me
- * Body: {
- *   "@fields": ["id", "email", "name", "profile.bio", "posts.id", "posts.title"]
- * }
+ * Body: { "@fields": ["id", "email", "name", "profile.bio"] }
  *
  * Response:
  * {
@@ -289,58 +409,23 @@ export class AppModule {}
  *   "name": "John Doe",
  *   "profile": {
  *     "bio": "Software developer"
- *   },
- *   "posts": [
- *     {
- *       "id": "post-1",
- *       "title": "My First Post"
- *     },
- *     {
- *       "id": "post-2",
- *       "title": "My Second Post"
- *     }
- *   ]
+ *   }
  * }
  *
- * Note: The @fields property is automatically removed from the body
- * before it reaches the service method, and field selection is applied
- * to the response automatically.
- */
-
-// ============================================================================
-// 4. Example Usage: /compose Batching
-// ============================================================================
-
-/**
- * Example: POST /compose - Batch multiple queries
- *
- * Request:
+ * 2. /compose with @fields:
  * POST /compose
  * Body: {
  *   "queries": {
  *     "user": {
  *       "path": "/user/me",
- *       "body": {
- *         "@fields": ["id", "email", "name"]
- *       }
+ *       "body": { "@fields": ["id", "email", "name"] }
  *     },
  *     "posts": {
  *       "path": "/posts",
- *       "body": {
- *         "@fields": ["id", "title", "authorId"]
- *       }
+ *       "body": { "@fields": ["id", "title", "authorId"] }
  *     },
  *     "stats": {
  *       "path": "/stats"
- *     },
- *     "userById": {
- *       "path": "/users/:id",
- *       "params": {
- *         "id": "user-456"
- *       },
- *       "body": {
- *         "@fields": ["id", "name", "email"]
- *       }
  *     }
  *   }
  * }
@@ -353,26 +438,13 @@ export class AppModule {}
  *     "name": "John Doe"
  *   },
  *   "posts": [
- *     {
- *       "id": "post-1",
- *       "title": "First Post",
- *       "authorId": "user-123"
- *     },
- *     {
- *       "id": "post-2",
- *       "title": "Second Post",
- *       "authorId": "user-123"
- *     }
+ *     { "id": "post-1", "title": "First Post", "authorId": "user-123" },
+ *     { "id": "post-2", "title": "Second Post", "authorId": "user-123" }
  *   ],
  *   "stats": {
  *     "totalUsers": 1000,
  *     "totalPosts": 5000,
  *     "activeUsers": 250
- *   },
- *   "userById": {
- *     "id": "user-456",
- *     "name": "User user-456",
- *     "email": "useruser-456@example.com"
  *   }
  * }
  *
@@ -385,97 +457,24 @@ export class AppModule {}
  */
 
 // ============================================================================
-// 5. Shared AsyncLocalStorage Context
+// 5. Migration Notes
 // ============================================================================
 
 /**
- * The AsyncLocalStorage context is automatically shared across:
+ * If you were previously using ComposeModule with maxFieldDepth:
  *
- * 1. Normal endpoints: Context initialized by RequestContextMiddleware
- * 2. /compose requests: Context initialized in ComposeController
- * 3. Sub-queries in /compose: Each query gets its own context, but can
- *    access the parent compose request context
+ * OLD:
+ * ComposeModule.forRoot({
+ *   routes: [...],
+ *   maxFieldDepth: 10,  // ❌ This option no longer exists
+ * })
  *
- * Context includes:
- * - Request ID
- * - Start time
- * - Per-request cache (for automatic deduplication)
- * - Selected fields (@fields)
- * - Request metadata
- *
- * Note: The AsyncLocalStorage context is automatically managed by rest-orchestrator.
- * The request-level cache is used internally for automatic deduplication of identical
- * queries within a /compose request. You don't need to manually access the context
- * in most cases - the caching and deduplication happen automatically.
- */
-
-// ============================================================================
-// 6. Response Format Examples
-// ============================================================================
-
-/**
- * Normal Endpoint Response (with @fields):
- *
- * Request: POST /user/me
- * Body: { "@fields": ["id", "email", "profile.bio"] }
- *
- * Response: 200 OK
- * {
- *   "id": "user-123",
- *   "email": "john@example.com",
- *   "profile": {
- *     "bio": "Software developer"
- *   }
- * }
- *
- *
- * /compose Response:
- *
- * Request: POST /compose
- * Body: {
- *   "queries": {
- *     "user": { "path": "/user/me", "body": { "@fields": ["id", "name"] } },
- *     "posts": { "path": "/posts" }
- *   }
- * }
- *
- * Response: 200 OK
- * {
- *   "user": {
- *     "id": "user-123",
- *     "name": "John Doe"
- *   },
- *   "posts": [
- *     { "id": "post-1", "title": "First Post", ... },
- *     { "id": "post-2", "title": "Second Post", ... }
- *   ]
- * }
- *
- *
- * Error Response (from /compose):
- *
- * If a query fails, the error is included in the response:
- * {
- *   "user": {
- *     "id": "user-123",
- *     "name": "John Doe"
- *   },
- *   "posts": {
- *     "error": "Path \"/posts\" not found in registry",
- *     "statusCode": 404
- *   }
- * }
- *
- *
- * Validation Error Response:
- *
- * Request: POST /compose
- * Body: { "queries": { "user": { "path": "/user/me" }, "invalid": {} } }
- *
- * Response: 400 Bad Request
- * {
- *   "statusCode": 400,
- *   "message": "Query \"invalid\" must have a 'path' property",
- *   "error": "Bad Request"
- * }
+ * NEW:
+ * FieldsModule.forRoot({
+ *   maxFieldDepth: 10,  // ✅ Now in FieldsModule
+ * }),
+ * ComposeModule.forRoot({
+ *   routes: [...],
+ *   // maxFieldDepth removed
+ * })
  */

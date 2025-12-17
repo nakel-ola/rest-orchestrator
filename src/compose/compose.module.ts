@@ -1,6 +1,6 @@
-import { DynamicModule, Module } from "@nestjs/common";
+import { Module } from "@nestjs/common";
 import { ComposeModuleOptions } from "./compose.module.interface";
-import { adaptRoutesToRegistry } from "./route-adapter";
+import { adaptRoutesToRegistry } from "../public/route-adapter";
 import { OrchestratorModule } from "../internal/orchestrator.module";
 import { RouteEntry } from "../internal/route-registry.service";
 
@@ -25,7 +25,7 @@ import { RouteEntry } from "../internal/route-registry.service";
  */
 @Module({})
 export class ComposeModule {
-  static forRoot(options: ComposeModuleOptions): DynamicModule {
+  static forRoot(options: ComposeModuleOptions) {
     // Convert public API format to RouteEntry[] format
     const routeEntries = adaptRoutesToRegistry(options.routes);
 
@@ -33,7 +33,6 @@ export class ComposeModule {
     const internalConfig = {
       routes: routeEntries,
       maxBatchSize: options.maxBatchSize,
-      maxFieldDepth: options.maxFieldDepth,
       enableCaching: options.enableCaching,
       maxExecutionTimeMs: options.maxExecutionTimeMs,
       maxPayloadSize: options.maxPayloadSize,

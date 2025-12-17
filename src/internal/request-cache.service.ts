@@ -1,6 +1,6 @@
 import { Injectable, Scope, Optional, Inject } from "@nestjs/common";
-import { RequestContextService } from "./request-context.service";
-import { RequestContextUtil } from "./request-context.util";
+import { RequestContextService } from "../core/context/request-context.service";
+import { RequestContextUtil } from "../core/context/request-context.util";
 import { CacheAdapter } from "./cache-adapter.interface";
 import { generateCacheKey } from "./cache-key.util";
 

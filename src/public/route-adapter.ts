@@ -1,4 +1,4 @@
-import { RouteRegistration } from "./compose.module.interface";
+import { RouteRegistration } from "../compose/compose.module.interface";
 import {
   RouteEntry,
   HandlerMetadata,

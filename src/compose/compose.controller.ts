@@ -7,8 +7,8 @@ import {
   HttpStatus,
   Inject,
 } from "@nestjs/common";
-import { RequestContextService } from "./request-context.service";
-import { RequestContextUtil } from "./request-context.util";
+import { RequestContextService } from "../core/context/request-context.service";
+import { RequestContextUtil } from "../core/context/request-context.util";
 import { ComposeService } from "./compose.service";
 import {
   ComposeRequest,
@@ -226,3 +226,4 @@ export class ComposeController {
     }
   }
 }
+

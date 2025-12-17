@@ -1,4 +1,4 @@
-import { Injectable, Scope, Type } from "@nestjs/common";
+import { Injectable, Scope, Type, OnModuleInit } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
 
 /**
@@ -84,12 +84,33 @@ export class RouteRegistryError extends Error {
  * RouteRegistry - manages route-to-handler mappings with validation
  */
 @Injectable({ scope: Scope.DEFAULT })
-export class RouteRegistry {
-  private readonly routes = new Map<string, HandlerMetadata>();
-  private readonly pathPatterns: Array<{ pattern: string; metadata: HandlerMetadata }> = [];
-  private initialized = false;
+export class RouteRegistry implements OnModuleInit {
+  private readonly routes: Map<string, HandlerMetadata>;
+  private readonly pathPatterns: Array<{
+    pattern: string;
+    metadata: HandlerMetadata;
+  }>;
+  private initialized: boolean;
+  private _moduleRef: ModuleRef | null = null;
 
-  constructor(private readonly moduleRef: ModuleRef) {}
+  constructor(private readonly moduleRef: ModuleRef) {
+    // Initialize properties in constructor to ensure they're always set
+    this.routes = new Map<string, HandlerMetadata>();
+    this.pathPatterns = [];
+    this.initialized = false;
+  }
+
+  onModuleInit() {
+    // Store ModuleRef reference after module initialization
+    this._moduleRef = this.moduleRef;
+  }
+
+  /**
+   * Set ModuleRef (fallback method if OnModuleInit doesn't work)
+   */
+  setModuleRef(moduleRef: ModuleRef): void {
+    this._moduleRef = moduleRef;
+  }
 
   /**
    * Register routes with validation
@@ -273,7 +294,10 @@ export class RouteRegistry {
     }
 
     // Validate method name
-    if (!entry.handler.methodName || typeof entry.handler.methodName !== "string") {
+    if (
+      !entry.handler.methodName ||
+      typeof entry.handler.methodName !== "string"
+    ) {
       throw new RouteRegistryError(
         "Handler method name must be a non-empty string",
         entry.path,
@@ -294,7 +318,9 @@ export class RouteRegistry {
     const validHttpMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
     if (!validHttpMethods.includes(entry.handler.httpMethod)) {
       throw new RouteRegistryError(
-        `HTTP method must be one of: ${validHttpMethods.join(", ")}, got: ${entry.handler.httpMethod}`,
+        `HTTP method must be one of: ${validHttpMethods.join(", ")}, got: ${
+          entry.handler.httpMethod
+        }`,
         entry.path,
         "INVALID_HTTP_METHOD"
       );
@@ -305,11 +331,18 @@ export class RouteRegistry {
    * Validate that all handlers exist and are callable
    */
   private validateHandlers(entries: RouteEntry[]): void {
+    if (!this._moduleRef) {
+      throw new RouteRegistryError(
+        "ModuleRef is not available. RouteRegistry must be initialized with ModuleRef.",
+        undefined,
+        "MODULE_REF_NOT_AVAILABLE"
+      );
+    }
     const errors: string[] = [];
 
     for (const entry of entries) {
       try {
-        const instance = this.moduleRef.get(entry.handler.handlerClass, {
+        const instance = this._moduleRef.get(entry.handler.handlerClass, {
           strict: false,
         });
 
@@ -328,7 +361,11 @@ export class RouteRegistry {
         }
       } catch (error) {
         errors.push(
-          `Failed to resolve handler ${entry.handler.handlerClass.name} for path: ${entry.path}. Error: ${error instanceof Error ? error.message : String(error)}`
+          `Failed to resolve handler ${
+            entry.handler.handlerClass.name
+          } for path: ${entry.path}. Error: ${
+            error instanceof Error ? error.message : String(error)
+          }`
         );
       }
     }
@@ -346,8 +383,15 @@ export class RouteRegistry {
    * Get instance of handler class
    */
   private getInstance(metadata: HandlerMetadata): any | null {
+    if (!this._moduleRef) {
+      throw new RouteRegistryError(
+        "ModuleRef is not available. RouteRegistry must be initialized with ModuleRef.",
+        undefined,
+        "MODULE_REF_NOT_AVAILABLE"
+      );
+    }
     try {
-      return this.moduleRef.get(metadata.handlerClass, { strict: false });
+      return this._moduleRef.get(metadata.handlerClass, { strict: false });
     } catch {
       return null;
     }
@@ -409,4 +453,3 @@ export class RouteRegistry {
     return [pathParts.join(":"), httpMethod];
   }
 }
-
